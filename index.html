@@ -284,14 +284,15 @@ osSyncEl.addEventListener('change', ()=>{ setRaw(THEME_KEY, osSyncEl.checked?'1'
 /* ===== Notion-fetch (hålls i RAM – ej redigerbart i UI) ===== */
 async function fetchCurrentFromNotionCalendar(){
   try{
-    const r = await fetch(NOTION_CAL_ENDPOINT, { cache: 'no-store' });
+    const url = `${NOTION_CAL_ENDPOINT}${NOTION_CAL_ENDPOINT.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
+    const r = await fetch(url, { cache: 'no-store' });
     if(!r.ok){
       const txt = await r.text().catch(()=> "");
       throw new Error(`HTTP ${r.status} ${r.statusText} ${txt || ""}`.trim());
     }
     const data = await r.json();
     if (Array.isArray(data?.periods) && data.periods.length){
-      TASK_PERIODS = sanitizeArray(data.periods); // endast i RAM
+      TASK_PERIODS = sanitizeArray(data.periods); // endast i RAM (ej redigerbar)
       storageNote.textContent = "Hämtat från Notion: Calendar (Gör nu).";
       return true;
     } else {
@@ -344,17 +345,25 @@ function loop(){
 
 /* Start */
 (async function init(){
-  if (getRaw(THEME_KEY) == null) setRaw(THEME_KEY, '0'); // default: solbaserat
+  if (getRaw(THEME_KEY) == null) setRaw(THEME_KEY, '0');
   applyTheme();
 
-  // Försök hämta aktuell uppgift från Notion (task-läge)
   await fetchCurrentFromNotionCalendar();
-
-  // Kör loop
   loop();
 
-  // Auto-refresh var 30s så Prioritet-/längd-/datumändringar slår igenom
-  setInterval(fetchCurrentFromNotionCalendar, 30000);
+  // Polla var 5s
+  let fetchLock = false;
+  async function safeFetch(){
+    if(fetchLock) return;
+    fetchLock = true;
+    try{ await fetchCurrentFromNotionCalendar(); }
+    finally{ fetchLock = false; }
+  }
+  setInterval(safeFetch, 5000);
+
+  // Direkt när fönstret får fokus / blir synligt
+  window.addEventListener('focus', safeFetch);
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'visible') safeFetch(); });
 })();
 </script>
 </body>
