@@ -406,13 +406,24 @@ function loop(){
   // “Nästa:” visar Prioritet=Hög (från proxyn) – annars em-dash
   subtitle.textContent = `Nästa: ${NEXT_HIGH_NAME || '—'}`;
 
-  // “Period kvar:” – visas endast i task-läge (och bara när inte övertid)
-  if (TASK_PERIODS && remain >= 0) {
+// “Period kvar:” – visas endast när det finns en Notion-uppgift,
+// men räknar ner tiden för den aktuella schemaperioden (t.ex. “Förmiddag”)
+if (TASK_PERIODS) {
+  const basePeriods = getPeriods();            // dina vanliga perioder
+  const basePick = pick(basePeriods);          // hitta aktiv period
+  const baseSpan = mergedSpan(basePick.list, basePick.idx);
+  const nMin = n.getHours()*60 + n.getMinutes() + n.getSeconds()/60;
+  const { remain: periodRemain } = wrapDiff(nMin, baseSpan.start, baseSpan.end);
+
+  if (periodRemain >= 0) {
     periodLeftEl.style.display = 'block';
-    periodLeftEl.textContent = `Period kvar: ${fmt(remain)}`;
+    periodLeftEl.textContent = `Period kvar: ${fmt(periodRemain)}`;
   } else {
     periodLeftEl.style.display = 'none';
   }
+} else {
+  periodLeftEl.style.display = 'none';
+}
 
   // Nedräkning + färger
   const isOverdue = remain < 0;
