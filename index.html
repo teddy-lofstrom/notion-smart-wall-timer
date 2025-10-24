@@ -46,6 +46,29 @@
   .fab{ position:fixed; right:12px; top:12px; width:44px; height:44px; z-index:60; border-radius:12px; display:grid; place-items:center; background:color-mix(in oklab, var(--bg) 92%, #000 0%); color:var(--fg); border:1px solid var(--outline); font-size:18px; user-select:none; cursor:pointer; touch-action:manipulation; box-shadow: var(--shadow); }
   .tog{ display:flex; align-items:center; gap:10px; margin:4px 0 12px 0; color:var(--subtle); }
   .tog input{ width:18px; height:18px; }
+  /* Övertid: röd bakgrund + vit text */
+body.overdue,
+body.overdue .app {
+  background: #F70523 !important;
+  color: #fff !important;
+}
+body.overdue .subtitle,
+body.overdue .title {
+  color: #fff !important;
+}
+body.overdue .bar {
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.25);
+}
+body.overdue .fill {
+  background: #fff;
+}
+body.overdue .tick span,
+body.overdue .tick i {
+  color: #fff;
+  opacity: 1;
+  background: #fff;
+}
 </style>
 </head>
 <body>
@@ -83,14 +106,14 @@
 
 <script>
 /* ==========================
-   Hjälpfunktioner
+   Hjälpfunktioner + UI
    ========================== */
 const $ = s => document.querySelector(s);
 const title=$('#title'), subtitle=$('#subtitle'), timeEl=$('#time'), fill=$('#fill'), ticks=$('#ticks');
 const settings=$('#settings'), storageNote=$('#storageNote');
 const osSyncEl = $('#osSync');
 
-/* Västerås koordinater (kan bytas om du vill) */
+/* Västerås koordinater */
 const LAT = 59.6099, LON = 16.5448;
 
 /* === Notion (Calendar) källa – PROD-domän === */
@@ -109,7 +132,10 @@ const DEFAULT_PERIODS = [
 ];
 
 /* === Aktiv källa: task-läge (Notion) prioriteras över period-läge === */
-let TASK_PERIODS = null; // hålls endast i RAM
+let TASK_PERIODS = null; // endast i RAM
+let CURRENT_TASK_NAME = "";         // för titel
+let CURRENT_TOTAL_LABEL = "";       // “Tid totalt” → visas vid tick-slut
+let NEXT_HIGH_NAME = "";            // “Nästa:”
 const activePeriods = ()=> TASK_PERIODS ? TASK_PERIODS.slice() : getPeriods();
 
 /* Lagring (endast för dina perioder) */
@@ -143,7 +169,13 @@ function setPeriods(p){
 function norm(v){ if(v==null) return "00:00"; v=String(v).trim().replace(/[.,;\-\s]+/g,':'); const m=v.match(/^(\d{1,2})(?::?(\d{1,2}))?/); let h=m&&m[1]!=null?parseInt(m[1],10):0; let mi=m&&m[2]!=null?parseInt(m[2],10):0; if(isNaN(h))h=0; if(isNaN(mi))mi=0; h=Math.max(0,Math.min(23,h)); mi=Math.max(0,Math.min(59,mi)); return (h<10?'0':'')+h+':'+(mi<10?'0':'')+mi; }
 const t2m = t=>{ const [h,m]=norm(t).split(':').map(Number); return (h%24)*60 + (m||0); };
 const pad2 = x=> (x<10?'0':'')+x;
-function fmt(ms){ let s=Math.max(0, Math.floor(ms/1000)), h=Math.floor(s/3600); s-=h*3600; let m=Math.floor(s/60); s-=m*60; return h+'h '+m+'m '+pad2(s)+'s'; }
+function fmt(ms, opts={}){ 
+  let s=Math.floor(ms/1000);
+  const sign = s<0 ? -1 : 1; s=Math.abs(s);
+  let h=Math.floor(s/3600); s-=h*3600; let m=Math.floor(s/60); s-=m*60;
+  const body = `${h}h ${m}m ${pad2(s)}s`;
+  return opts.withSign && sign<0 ? `+${body}` : body; // "+" vid övertid
+}
 
 /* Periodlogik */
 function expand(ps){
@@ -174,21 +206,21 @@ function mergedSpan(list, idx){
 }
 function wrapDiff(nowMin, start, end){
   let n=nowMin; if(end>1440 && n<start) n+=1440;
-  const total=(end-start)*60*1000; const passed=(n-start)*60*1000; const remain=Math.max(0,total-passed);
+  const total=(end-start)*60*1000; const passed=(n-start)*60*1000; const remain=(total-passed); // OBS: kan vara negativt
   return {total,passed,remain};
 }
 
 /* Ticks */
 const chooseTickStep = totalMin => totalMin<=120?30: totalMin<=480?60:120;
 const fmtTick = mins => (mins%60===0? (mins/60)+'h' : (mins%60)+'m');
-function drawTicks(totalMin){
+function drawTicks(totalMin, endLabel = "slut"){
   ticks.innerHTML='';
   const step=chooseTickStep(totalMin);
   for(let at=0; at<totalMin; at+=step){
     const left=(at/totalMin)*100; const d=document.createElement('div');
     d.className='tick'; d.style.left=left+'%'; d.innerHTML='<i></i><span>'+fmtTick(at)+'</span>'; ticks.appendChild(d);
   }
-  const end=document.createElement('div'); end.className='tick end'; end.style.left='100%'; end.innerHTML='<i></i><span>slut</span>'; ticks.appendChild(end);
+  const end=document.createElement('div'); end.className='tick end'; end.style.left='100%'; end.innerHTML=`<i></i><span>${endLabel || 'slut'}</span>`; ticks.appendChild(end);
 }
 
 /* ============ Tema & OS-sync ============ */
@@ -196,6 +228,7 @@ const THEME_KEY = 'walltimer.theme.osSync';
 function setTheme(mode){ document.documentElement.setAttribute('data-theme', mode==='dark'?'dark':'light'); }
 function getOsPref(){ return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light'; }
 
+/* Soltema (oförändrat, men vi tar bort "danger"-bakgrunden i CSS-logiken) */
 function toRadians(d){return d*Math.PI/180;} function toDegrees(r){return r*180/Math.PI;}
 function dayOfYear(d){ const n=new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())); const start=new Date(Date.UTC(d.getFullYear(),0,0)); return Math.floor((n-start)/86400000); }
 function solarTimes(date, lat, lon){
@@ -241,7 +274,7 @@ if (window.matchMedia){
   mq.addEventListener?.('change', e=>{ if(getRaw(THEME_KEY)==='1'){ setTheme(e.matches?'dark':'light'); } });
 }
 
-/* UI: inställningar */
+/* UI: inställningar (perioder – uppgift från Notion visas inte här) */
 function openSettings(v){ settings.style.display = (v===false)? 'none':'block'; storageNote.textContent = HAS_STORAGE ? "" : "Obs: Lagring låst – använder minneslagring."; }
 function rowTpl(p,i){
   return `<div class="row" data-i="${i}">
@@ -272,7 +305,6 @@ settings.addEventListener('click', e=>{
   if(idx==null) return; const ps=getPeriods(); ps.splice(+idx,1); setPeriods(ps); renderRows();
 });
 $('#clear').addEventListener('click', ()=>{
-  // Rensa till standardperioder (inte gamla egna)
   setPeriods(DEFAULT_PERIODS);
   renderRows();
   storageNote.textContent = "Återställt till standardperioder.";
@@ -281,7 +313,7 @@ $('#clear').addEventListener('click', ()=>{
 /* OS-sync toggle */
 osSyncEl.addEventListener('change', ()=>{ setRaw(THEME_KEY, osSyncEl.checked?'1':'0'); applyTheme(); });
 
-/* ===== Notion-fetch (hålls i RAM – ej redigerbart i UI) ===== */
+/* ===== Notion-fetch (RAM – ej redigerbart i UI) ===== */
 async function fetchCurrentFromNotionCalendar(){
   try{
     const url = `${NOTION_CAL_ENDPOINT}${NOTION_CAL_ENDPOINT.includes('?') ? '&' : '?'}_ts=${Date.now()}`;
@@ -292,76 +324,106 @@ async function fetchCurrentFromNotionCalendar(){
     }
     const data = await r.json();
     if (Array.isArray(data?.periods) && data.periods.length){
-      TASK_PERIODS = sanitizeArray(data.periods); // endast i RAM (ej redigerbar)
+      TASK_PERIODS = sanitizeArray(data.periods); // RAM
+      CURRENT_TASK_NAME = (data.periods[0].name || "").trim();
+      CURRENT_TOTAL_LABEL = (data.meta?.tidTotalt || "").trim();
+      NEXT_HIGH_NAME = (data.meta?.nextHighName || "").trim();
       storageNote.textContent = "Hämtat från Notion: Calendar (Gör nu).";
       return true;
     } else {
-      TASK_PERIODS = null; // fallback till egna perioder
+      TASK_PERIODS = null;
+      CURRENT_TASK_NAME = "";
+      CURRENT_TOTAL_LABEL = "";
+      NEXT_HIGH_NAME = (data?.meta?.nextHighName || "").trim();
       storageNote.textContent = "Ingen 'Gör nu' – använder dina perioder.";
     }
   }catch(err){
     console.warn("Notion Calendar-fetch misslyckades:", err);
-    TASK_PERIODS = null;
+    TASK_PERIODS = null; CURRENT_TASK_NAME=""; CURRENT_TOTAL_LABEL="";
     storageNote.textContent = `Kunde inte hämta från Notion (${err.message}). Använder dina perioder.`;
   }
   return false;
 }
 
-/* Manuell uppdatering */
-$('#refresh')?.addEventListener('click', async ()=>{
-  storageNote.textContent = "Hämtar från Notion...";
-  await fetchCurrentFromNotionCalendar();
-});
-
 /* ===== Huvudloop (RAF) ===== */
 function loop(){
   const ps = activePeriods();
   const pickRes=pick(ps);
-  const cur=pickRes.cur, nxt=pickRes.nxt;
-  const n=new Date(); const nMin=n.getHours()*60+n.getMinutes()+n.getSeconds()/60;
+  const cur=pickRes.cur;
+  const n=new Date(); const nowMin=n.getHours()*60+n.getMinutes()+n.getSeconds()/60;
 
+  // Beräkna aktuell spann (för att få total, passed, remain – där remain kan bli negativ)
   let spanStart=cur.a, spanEnd=cur.b;
   if (pickRes.idx !== -1){ const span=mergedSpan(pickRes.list, pickRes.idx); spanStart=span.start; spanEnd=span.end; }
-  const {total, passed, remain} = wrapDiff(nMin, spanStart, spanEnd);
+  const {total, passed, remain} = wrapDiff(nowMin, spanStart, spanEnd);
+  const durationMin = (spanEnd - spanStart);
 
-  const curEndMin = ((spanEnd % 1440) + 1440)%1440;
-  const curEndH=pad2(Math.floor(curEndMin/60)), curEndM=pad2(curEndMin%60);
-  const nxtStartH=pad2(Math.floor(nxt.a/60)), nxtStartM=pad2(nxt.a%60);
+  // 1) Titel + färg på uppgiftsnamn
+  const curEndMin = ((spanEnd % 1440) + 1440)%1440; const curEndH=pad2(Math.floor(curEndMin/60)), curEndM=pad2(curEndMin%60);
+  if (TASK_PERIODS) {
+    // “Tid kvar: ” + "Uppgift" (grön) + slut
+    title.innerHTML = `Tid kvar: <span style="color:#2A533C">"${escapeHtml(CURRENT_TASK_NAME || cur.name)}"</span> (slutar kl ${curEndH}:${curEndM})`;
+  } else {
+    title.textContent = `Tid kvar: "${cur.name}" (slutar kl ${curEndH}:${curEndM})`;
+  }
 
-  title.textContent = `Tid kvar av ${cur.name} (slutar kl ${curEndH}:${curEndM})`;
-  subtitle.textContent = `Nästa: ${nxt?.name ?? '—'} → ${nxtStartH}:${nxtStartM}`;
-  timeEl.textContent = fmt(remain);
+  // 2) Nästa: visa Prioritet = Hög (om vi har den), annars em-dash
+  subtitle.textContent = `Nästa: ${NEXT_HIGH_NAME || '—'}`;
 
+  // 3) Tidssträng och färglogik
+  const isOverdue = remain < 0;
+  const isLast10 = !isOverdue && remain <= 10*60*1000;
+
+  if (isOverdue) {
+    document.body.classList.add('overdue');
+    timeEl.textContent = fmt(remain, { withSign:true }); // visar t.ex. +0h 03m 12s
+  } else {
+    document.body.classList.remove('overdue');
+    timeEl.textContent = fmt(remain);
+  }
+
+  // färga nedräkningstexten röd när ≤10 min kvar (men inte i overdue – då har vi annan stil)
+  if (isLast10) {
+    timeEl.style.color = '#F70523';
+  } else {
+    timeEl.style.color = ''; // reset till tema-färg
+  }
+
+  // 4) Byt titel helt vid övertid
+  if (isOverdue) {
+    title.textContent = "DU HAR GÅTT ÖVER TIDEN!";
+  }
+
+  // Progressbar (clampa till [0,100] även vid övertid)
   const pct = total>0 ? Math.min(100, Math.max(0, (passed/total)*100)) : 100;
   fill.style.width = pct + '%';
 
-  const durationMin = (spanEnd - spanStart);
-  if (!loop._lastDur || loop._lastDur!==durationMin){ drawTicks(durationMin); loop._lastDur=durationMin; }
-
-  if (remain <= 10*60*1000) document.body.classList.add('danger'); else document.body.classList.remove('danger');
+  // Rita ticks (med “Tid totalt” om vi har det)
+  const endLabel = CURRENT_TOTAL_LABEL || 'slut';
+  if (!loop._lastDur || loop._lastDur!==durationMin || loop._lastEndLabel!==endLabel){
+    drawTicks(durationMin, endLabel);
+    loop._lastDur=durationMin;
+    loop._lastEndLabel=endLabel;
+  }
 
   requestAnimationFrame(loop);
 }
 
-/* Start */
+/* Escape för HTML-injection i titel */
+function escapeHtml(s=""){ return s.replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+/* Start + snabb polling */
 (async function init(){
-  if (getRaw(THEME_KEY) == null) setRaw(THEME_KEY, '0');
+  if (getRaw(THEME_KEY) == null) setRaw(THEME_KEY, '0'); // default: solbaserat
   applyTheme();
 
   await fetchCurrentFromNotionCalendar();
   loop();
 
-  // Polla var 5s
+  // Snabb polling + fokus-uppdatering
   let fetchLock = false;
-  async function safeFetch(){
-    if(fetchLock) return;
-    fetchLock = true;
-    try{ await fetchCurrentFromNotionCalendar(); }
-    finally{ fetchLock = false; }
-  }
+  async function safeFetch(){ if(fetchLock) return; fetchLock=true; try{ await fetchCurrentFromNotionCalendar(); } finally{ fetchLock=false; } }
   setInterval(safeFetch, 5000);
-
-  // Direkt när fönstret får fokus / blir synligt
   window.addEventListener('focus', safeFetch);
   document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'visible') safeFetch(); });
 })();
